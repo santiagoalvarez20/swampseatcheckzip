@@ -7,12 +7,14 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import nodemailer from "nodemailer";
+import { spawn } from "child_process";
 
 const PORT = Number(process.env.PORT || 5000);
 const DATA_DIR = path.join(process.cwd(), "data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const isProduction = process.env.NODE_ENV === "production";
+const automationProcesses = new Map<string, ReturnType<typeof spawn>>();
 
 interface UserRecord {
   id: string;
@@ -108,7 +110,7 @@ function getDefaultState(user?: PublicUser): UserState {
     courses: [],
     status: "stopped",
     results: {},
-    logs: ["Session authenticated. Backend hooks are ready for Render."],
+    logs: ["Session authenticated. Automation engine is ready."],
   };
 }
 
@@ -284,23 +286,144 @@ async function startServer() {
     const current = getUserState(user.id, user);
     if (!current.username || !current.password) return res.status(400).json({ error: "Save portal credentials before starting." });
     if (current.courses.length === 0) return res.status(400).json({ error: "Add at least one course to monitor." });
+    if (automationProcesses.has(user.id)) return res.status(400).json({ error: "Automation is already running for this account." });
 
     const nextState = {
       ...current,
       status: "running" as const,
-      logs: [...current.logs, `Monitor armed for ${current.courses.length} course${current.courses.length === 1 ? "" : "s"}.`, "Render worker hook is ready. Connect automation.ts or your production worker here."].slice(-200),
+      logs: [...current.logs, `Monitor armed for ${current.courses.length} course${current.courses.length === 1 ? "" : "s"}.`, "Launching automation.ts now."].slice(-200),
     };
 
     saveUserState(user.id, nextState);
     io.to(user.id).emit("status", "running");
     io.to(user.id).emit("log", nextState.logs[nextState.logs.length - 2]);
     io.to(user.id).emit("log", nextState.logs[nextState.logs.length - 1]);
+
+    const automationProcess = spawn("npx", ["tsx", "automation.ts"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        CONFIG_JSON: JSON.stringify({
+          username: current.username,
+          password: current.password,
+          email: current.email,
+          courses: current.courses,
+        }),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    automationProcesses.set(user.id, automationProcess);
+
+    const handleLine = (rawLine: string) => {
+      const line = rawLine.trim();
+      if (!line) return;
+
+      if (line.startsWith("SCREENSHOT:")) {
+        io.to(user.id).emit("log", "Screenshot captured from automation.");
+        appendLog(user.id, "Screenshot captured from automation.");
+        return;
+      }
+
+      if (line.startsWith("COURSE_RESULTS:")) {
+        const payload = line.replace("COURSE_RESULTS:", "").trim();
+        try {
+          const resultData = JSON.parse(payload);
+          const state = getUserState(user.id, user);
+          saveUserState(user.id, {
+            ...state,
+            results: {
+              ...state.results,
+              [resultData.name]: {
+                sections: resultData.sections || [],
+                timestamp: resultData.timestamp || new Date().toISOString(),
+              },
+            },
+          });
+          io.to(user.id).emit("log", `Results updated for ${resultData.name}.`);
+          appendLog(user.id, `Results updated for ${resultData.name}.`);
+        } catch {
+          io.to(user.id).emit("log", "Could not parse course results from automation.");
+          appendLog(user.id, "Could not parse course results from automation.");
+        }
+        return;
+      }
+
+      if (line.startsWith("PROGRESS:")) {
+        try {
+          const progress = JSON.parse(line.replace("PROGRESS:", "").trim());
+          const progressMessage = `Progress: ${progress.course} is ${progress.status}.`;
+          io.to(user.id).emit("log", progressMessage);
+          appendLog(user.id, progressMessage);
+        } catch {
+          io.to(user.id).emit("log", line);
+          appendLog(user.id, line);
+        }
+        return;
+      }
+
+      const message = line.includes("DUO_START")
+        ? "DUO approval is required on your phone."
+        : line.includes("DUO_SUCCESS")
+          ? "DUO approval received."
+          : line.includes("DUO_TIMEOUT")
+            ? "DUO approval timed out."
+            : line.startsWith("DUO_CODE:")
+              ? `DUO code: ${line.replace("DUO_CODE:", "").trim()}`
+              : line;
+
+      io.to(user.id).emit("log", message);
+      appendLog(user.id, message);
+    };
+
+    automationProcess.stdout.on("data", (chunk) => {
+      chunk.toString().split("\n").forEach(handleLine);
+    });
+
+    automationProcess.stderr.on("data", (chunk) => {
+      chunk.toString().split("\n").forEach((line: string) => {
+        const message = line.trim();
+        if (!message) return;
+        io.to(user.id).emit("log", `ERROR: ${message}`);
+        appendLog(user.id, `ERROR: ${message}`);
+      });
+    });
+
+    automationProcess.on("close", (code) => {
+      automationProcesses.delete(user.id);
+      const state = getUserState(user.id, user);
+      saveUserState(user.id, {
+        ...state,
+        status: "stopped",
+        logs: [...state.logs, `Automation exited with code ${code}.`].slice(-200),
+      });
+      io.to(user.id).emit("status", "stopped");
+      io.to(user.id).emit("log", `Automation exited with code ${code}.`);
+    });
+
+    automationProcess.on("error", (error) => {
+      automationProcesses.delete(user.id);
+      const state = getUserState(user.id, user);
+      saveUserState(user.id, {
+        ...state,
+        status: "stopped",
+        logs: [...state.logs, `Automation failed to launch: ${error.message}`].slice(-200),
+      });
+      io.to(user.id).emit("status", "stopped");
+      io.to(user.id).emit("log", `Automation failed to launch: ${error.message}`);
+    });
+
     res.json({ success: true, status: "running" });
   });
 
   app.post("/api/stop", requireAuth, (req, res) => {
     const user = res.locals.user as PublicUser;
     const current = getUserState(user.id, user);
+    const automationProcess = automationProcesses.get(user.id);
+    if (automationProcess) {
+      automationProcess.kill();
+      automationProcesses.delete(user.id);
+    }
     const nextState = { ...current, status: "stopped" as const, logs: [...current.logs, "Monitor stopped for this session."].slice(-200) };
     saveUserState(user.id, nextState);
     io.to(user.id).emit("status", "stopped");

@@ -7,8 +7,8 @@ const CONFIG_FILE = path.join(process.cwd(), 'config.json');
 const SYSTEM_CONFIG_FILE = path.join(process.cwd(), 'system_config.json');
 
 let systemConfig = {
-  senderEmail: "swampseatcheckalerts@gmail.com",
-  senderPass: "dhhzpbaaljxememd"
+  senderEmail: "",
+  senderPass: ""
 };
 
 if (fs.existsSync(SYSTEM_CONFIG_FILE)) {
