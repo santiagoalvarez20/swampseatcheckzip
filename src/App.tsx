@@ -93,6 +93,18 @@ function AuthShell({ onAuthenticated }: { onAuthenticated: (user: User) => void 
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (mode === "signup" && !form.name.trim()) {
+      toast.error("Name is required");
+      return;
+    }
+    if (!form.email.trim() || !form.password) {
+      toast.error("Email and password are required");
+      return;
+    }
+    if (form.password.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
     setIsSubmitting(true);
     try {
       const endpoint = mode === "signup" ? "/api/auth/signup" : "/api/auth/login";
@@ -170,7 +182,7 @@ function AuthShell({ onAuthenticated }: { onAuthenticated: (user: User) => void 
                       <Label className="text-slate-200">Name</Label>
                       <div className="relative">
                         <User className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <Input className="h-12 border-white/10 bg-white/10 pl-10 text-white placeholder:text-slate-500" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Jane Gator" />
+                        <Input required autoComplete="name" className="h-12 border-white/10 bg-white/10 pl-10 text-white placeholder:text-slate-500" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Jane Gator" />
                       </div>
                     </div>
                   )}
@@ -178,20 +190,20 @@ function AuthShell({ onAuthenticated }: { onAuthenticated: (user: User) => void 
                     <Label className="text-slate-200">Email</Label>
                     <div className="relative">
                       <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                      <Input className="h-12 border-white/10 bg-white/10 pl-10 text-white placeholder:text-slate-500" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="you@example.com" />
+                      <Input required autoComplete="email" className="h-12 border-white/10 bg-white/10 pl-10 text-white placeholder:text-slate-500" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="you@example.com" />
                     </div>
                   </div>
                   <div className="space-y-2">
                     <Label className="text-slate-200">Password</Label>
                     <div className="relative">
                       <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                      <Input className="h-12 border-white/10 bg-white/10 px-10 text-white placeholder:text-slate-500" type={showPassword ? "text" : "password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Minimum 8 characters" />
+                      <Input required minLength={8} autoComplete={mode === "signup" ? "new-password" : "current-password"} className="h-12 border-white/10 bg-white/10 px-10 text-white placeholder:text-slate-500" type={showPassword ? "text" : "password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Minimum 8 characters" />
                       <button className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" type="button" onClick={() => setShowPassword(!showPassword)}>
                         {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     </div>
                   </div>
-                  <Button disabled={isSubmitting} className="h-12 w-full rounded-2xl bg-cyan-300 text-base font-black text-slate-950 hover:bg-cyan-200">
+                  <Button type="submit" disabled={isSubmitting} className="h-12 w-full rounded-2xl bg-cyan-300 text-base font-black text-slate-950 hover:bg-cyan-200">
                     {isSubmitting ? "Securing..." : mode === "signup" ? "Create session account" : "Sign in"}
                   </Button>
                 </form>
