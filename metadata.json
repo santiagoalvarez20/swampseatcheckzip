@@ -1,0 +1,5 @@
+{
+  "name": "SwampSeatCheck",
+  "description": "Automated course monitoring for University of Florida students. Get alerts the moment a seat opens.",
+  "requestFramePermissions": []
+}
